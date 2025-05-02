@@ -175,10 +175,6 @@ func (n *Node) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam.Re
 						continue
 					}
 
-					if e.IsExcludedBySpec(n.k8sObj.Spec.ENI) {
-						continue
-					}
-
 					found := false
 					for ip := range usedIPs {
 						if prefixAddr.Contains(netip.MustParseAddr(ip)) {

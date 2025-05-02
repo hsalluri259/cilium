@@ -88,6 +88,10 @@ type NodeOperations interface {
 	// perform the release of IPPrefixes.
 	ReleaseIPPrefixes(ctx context.Context, release *ReleaseAction) error
 
+	// ReleaseIPPrefixes is called after invoking PrepareIPRelease and needs to
+	// perform the release of IPPrefixes.
+	ReleaseIPPrefixes(ctx context.Context, release *ReleaseAction) error
+
 	// ReleaseIPs is called after invoking PrepareIPRelease and needs to
 	// perform the release of IPs.
 	ReleaseIPs(ctx context.Context, release *ReleaseAction) error
