@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 ARG BASE_IMAGE=scratch
-ARG GOLANG_IMAGE=docker.io/library/golang:1.24.5@sha256:14fd8a55e59a560704e5fc44970b301d00d344e45d6b914dda228e09f359a088
-ARG ALPINE_IMAGE=docker.io/library/alpine:3.21.2@sha256:56fa17d2a7e7f168a043a2712e63aed1f8543aeafdcee47c58dcffe38ed51099
-ARG CILIUM_BUILDER_IMAGE=quay.io/cilium/cilium-builder:ab0a4d0ab18f2425eb88d3644fcc4b1326517fab@sha256:2f16396c3f411f203f274f0ecbdfbbd32146f5640753ac0d774c3f8a9e902243
-
+ARG GOLANG_IMAGE=docker.io/library/golang:1.24.2@sha256:d9db32125db0c3a680cfb7a1afcaefb89c898a075ec148fdc2f0f646cc2ed509
+ARG ALPINE_IMAGE=docker.io/library/alpine:3.21.3@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
+ARG CILIUM_BUILDER_IMAGE=194156363232.dkr.ecr.us-west-2.amazonaws.com/harish-test/cilium/cilium-builder-dev:165141a9a46cdea67caaaff14eacf799513c36b4@sha256:2242949a88da328864308157baf4f3c51e89abd1cea2d302ce0ea8384bb62140
+ARG OPERATOR_VARIANT=operator-aws
 # BUILDPLATFORM is an automatic platform ARG enabled by Docker BuildKit.
 # Represents the plataform where the build is happening, do not mix with
 # TARGETARCH
@@ -22,10 +22,12 @@ ARG MODIFIERS
 
 WORKDIR /go/src/github.com/cilium/cilium
 
+# We must override NOSTRIP=1 to ensure binaries include debug symbols for extraction. They will be stripped subsequently
+# in accordance with the supplied/default NOSTRIP setting. See "Extract debug symbols" below.
 RUN --mount=type=bind,readwrite,target=/go/src/github.com/cilium/cilium \
     --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/go/pkg \
-    make GOARCH=${TARGETARCH} DESTDIR=/out/${TARGETOS}/${TARGETARCH} $(echo $MODIFIERS | tr -d '"') \
+    make GOARCH=${TARGETARCH} DESTDIR=/out/${TARGETOS}/${TARGETARCH} $(echo $MODIFIERS | tr -d '"') NOSTRIP=1 \
     build-container-${OPERATOR_VARIANT} install-container-binary-${OPERATOR_VARIANT}
 
 # licenses-all is a "script" that executes "go run" so its ARCH should be set
@@ -34,6 +36,24 @@ RUN --mount=type=bind,readwrite,target=/go/src/github.com/cilium/cilium \
     --mount=type=cache,target=/root/.cache \
     --mount=type=cache,target=/go/pkg \
     make GOARCH=${BUILDARCH} licenses-all && mv LICENSE.all /out/${TARGETOS}/${TARGETARCH}
+
+# Extract debug symbols to /tmp/debug and strip the binaries if NOSTRIP is not set.
+RUN set -xe && \
+    export D=/tmp/debug/${TARGETOS}/${TARGETARCH} && \
+    cd /out/${TARGETOS}/${TARGETARCH} && \
+    find . -type f \
+      -executable \
+      -exec sh -c \
+        'filename=$(basename ${0}) && \
+         objcopy --only-keep-debug ${0} ${0}.debug && \
+         if ! echo "$MODIFIERS" | grep "NOSTRIP=1" ; then objcopy --strip-all ${0} && (cd $(dirname ${0}) && objcopy --add-gnu-debuglink=${filename}.debug ${filename}) ; fi && \
+         mkdir -p $(dirname ${D}/${0}) && \
+         mv -v ${0}.debug ${D}/${0}.debug' \
+      {} \;
+
+# Check debug symbols are present
+RUN for f in $(find /tmp/debug -type f -name '*.debug' -not -name 'debug-wrapper.debug') ; do readelf -S ${f} | grep -q \\.symtab || \
+    (echo Debug symbols are missing in ${f} - possibly due to incorrect build parameters && false); done
 
 # BUILDPLATFORM is an automatic platform ARG enabled by Docker BuildKit.
 # Represents the plataform where the build is happening, do not mix with
@@ -91,3 +111,10 @@ ENV DEBUG_HOLD=${DEBUG_HOLD}
 COPY --from=builder /out/${TARGETOS}/${TARGETARCH}/usr/bin/cilium-${OPERATOR_VARIANT} /usr/bin/cilium-${OPERATOR_VARIANT}-bin
 COPY --from=debug-tools /go/bin/dlv /usr/bin/dlv
 COPY --from=debug-tools /out/${TARGETOS}/${TARGETARCH}/bin/debug-wrapper /usr/bin/cilium-${OPERATOR_VARIANT}
+
+# Copy in the debug symbols in case the binaries were stripped
+COPY --from=builder /tmp/debug/${TARGETOS}/${TARGETARCH}/ /usr/lib/debug/
+
+# Ensure dlv finds the debug symbols. Due to CGO_ENABLED=0, we have no GNU build-id, so Delve's default search path
+# is insufficient.
+ADD images/operator/dlv-config.yml /root/.config/dlv/config.yml

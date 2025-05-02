@@ -39,6 +39,7 @@ const (
 	createInterfaceAndAllocateIP = "createInterfaceAndAllocateIP"
 	allocateIP                   = "allocateIP"
 	releaseIP                    = "releaseIP"
+	releaseIPPrefixes            = "releaseIPPrefixes"
 
 	// operator status
 	success = "success"
@@ -380,11 +381,7 @@ func calculateExcessIPs(availableIPs, usedIPs, preAllocate, minAllocate, maxAbov
 	// interface restrictions, less than max-above-watermark may have been
 	// allocated but we never want to release IPs that have been allocated
 	// because of max-above-watermark.
-	excessIPs = availableIPs - usedIPs - preAllocate - maxAboveWatermark
-	if excessIPs < 0 {
-		excessIPs = 0
-	}
-
+	excessIPs = max(availableIPs-usedIPs-preAllocate-maxAboveWatermark, 0)
 	return
 }
 
@@ -489,15 +486,9 @@ func (n *Node) recalculate() {
 		n.stats.IPv4.AssignedStaticIP = stats.AssignedStaticIP
 	}
 
-	// Get used IP count with prefixes included
-	usedIPForExcessCalc := n.stats.IPv4.UsedIPs
-	if n.ops.IsPrefixDelegated() {
-		usedIPForExcessCalc = n.ops.GetUsedIPWithPrefixes()
-	}
-
 	n.stats.IPv4.AvailableIPs = len(n.ipv4Alloc.available)
 	n.stats.IPv4.NeededIPs = calculateNeededIPs(n.stats.IPv4.AvailableIPs, n.stats.IPv4.UsedIPs, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAllocate())
-	n.stats.IPv4.ExcessIPs = calculateExcessIPs(n.stats.IPv4.AvailableIPs, usedIPForExcessCalc, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAboveWatermark())
+	n.stats.IPv4.ExcessIPs = calculateExcessIPs(n.stats.IPv4.AvailableIPs, n.stats.IPv4.UsedIPs, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAboveWatermark())
 	n.stats.IPv4.RemainingInterfaces = stats.RemainingAvailableInterfaceCount
 	n.stats.IPv4.Capacity = stats.NodeCapacity
 
@@ -651,6 +642,9 @@ type ReleaseAction struct {
 
 	// IPsToRelease is the list of IPs to release
 	IPsToRelease []string
+
+	// IPPrefixes is the list of prefixes to release
+	IPPrefixesToRelease []string
 }
 
 // maintenanceAction represents the resources available for allocation for a
@@ -669,12 +663,13 @@ func (n *Node) determineMaintenanceAction() (*maintenanceAction, error) {
 
 	scopedLog := n.logger()
 	stats := n.Stats()
-
 	// Validate that the node still requires addresses to be released, the
 	// request may have been resolved in the meantime.
 	if n.manager.releaseExcessIPs && stats.IPv4.ExcessIPs > 0 {
 		a.release = n.ops.PrepareIPRelease(stats.IPv4.ExcessIPs, scopedLog)
-		return a, nil
+		if a.release != nil && len(a.release.IPsToRelease) > 0 {
+			return a, nil
+		}
 	}
 
 	// Validate that the node still requires addresses to be allocated, the
@@ -897,11 +892,27 @@ func (n *Node) handleIPRelease(ctx context.Context, a *maintenanceAction) (insta
 		})
 		scopedLog.Info("Releasing excess IPs from node")
 		start := time.Now()
+		// Unassign unneeded IPPrefixes
+		if len(a.release.IPPrefixesToRelease) > 0 {
+			err := n.ops.ReleaseIPPrefixes(ctx, a.release)
+			if err != nil {
+				n.manager.metricsAPI.ReleaseAttempt(releaseIPPrefixes, failed, string(a.release.PoolID), metrics.SinceInSeconds(start))
+				scopedLog.Warn(
+					"Unable to unassign ipPrefixes from interface",
+					logfields.Error, err,
+					logfields.SelectedInterface, a.release.InterfaceID,
+					logfields.ReleasingAddresses, a.release.IPPrefixesToRelease,
+				)
+				return false, err
+			}
+			n.manager.metricsAPI.ReleaseAttempt(releaseIPPrefixes, success, string(a.release.PoolID), metrics.SinceInSeconds(start))
+			n.manager.metricsAPI.AddIPRelease(string(a.release.PoolID), int64(len(a.release.IPsToRelease)))
+		}
+
 		err := n.ops.ReleaseIPs(ctx, a.release)
 		if err == nil {
 			n.manager.metricsAPI.ReleaseAttempt(releaseIP, success, string(a.release.PoolID), metrics.SinceInSeconds(start))
 			n.manager.metricsAPI.AddIPRelease(string(a.release.PoolID), int64(len(a.release.IPsToRelease)))
-
 			// Remove the IPs from ipsMarkedForRelease
 			n.mutex.Lock()
 			for _, ip := range ipsToRelease {

@@ -84,6 +84,10 @@ type NodeOperations interface {
 	// indicates a need to release IPs.
 	PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ReleaseAction
 
+	// ReleaseIPPrefixes is called after invoking PrepareIPRelease and needs to
+	// perform the release of IPPrefixes.
+	ReleaseIPPrefixes(ctx context.Context, release *ReleaseAction) error
+
 	// ReleaseIPs is called after invoking PrepareIPRelease and needs to
 	// perform the release of IPs.
 	ReleaseIPs(ctx context.Context, release *ReleaseAction) error
@@ -98,10 +102,6 @@ type NodeOperations interface {
 
 	// IsPrefixDelegated helps identify if a node supports prefix delegation
 	IsPrefixDelegated() bool
-
-	// GetUsedIPWithPrefixes returns the total number of used IPs including all IPs in a prefix if at-least one of
-	// the prefix IPs is in use.
-	GetUsedIPWithPrefixes() int
 }
 
 // AllocationImplementation is the interface an implementation must provide.

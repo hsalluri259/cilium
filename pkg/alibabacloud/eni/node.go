@@ -362,6 +362,13 @@ func (n *Node) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam.Re
 	return r
 }
 
+// ReleaseIPPrefixes is a no-op on AlibabaCloud since Alibaba ENIs don't
+// support prefix delegation.
+func (n *Node) ReleaseIPPrefixes(ctx context.Context, r *ipam.ReleaseAction) error {
+	// nothing to do
+	return nil
+}
+
 // ReleaseIPs performs the ENI IP release operation
 func (n *Node) ReleaseIPs(ctx context.Context, r *ipam.ReleaseAction) error {
 	return n.manager.api.UnassignPrivateIPAddresses(ctx, r.InterfaceID, r.IPsToRelease)
@@ -400,13 +407,6 @@ func (n *Node) loggerLocked() *logrus.Entry {
 
 func (n *Node) IsPrefixDelegated() bool {
 	return false
-}
-
-func (n *Node) GetUsedIPWithPrefixes() int {
-	if n.k8sObj == nil {
-		return 0
-	}
-	return len(n.k8sObj.Status.IPAM.Used)
 }
 
 // getLimits returns the interface and IP limits of this node
