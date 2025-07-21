@@ -227,14 +227,13 @@ func (n *Node) PrepareIPRelease(excessIPs int, scopedLog *logrus.Entry) *ipam.Re
 			// Look for next ENI if we do not have an ENI with either a Prefix/secondary IP to release
 			continue
 		}
-		scopedLog.Debug(
-			"Considering ENI for IP release",
-			fieldEniID, e.ID,
-			logfields.NeedIndex, *n.k8sObj.Spec.ENI.FirstInterfaceIndex,
-			logfields.Index, e.Number,
-			logfields.NumAddresses, len(e.Addresses),
-		)
 
+		scopedLog.WithFields(logrus.Fields{
+			fieldEniID:     e.ID,
+			"needIndex":    *n.k8sObj.Spec.ENI.FirstInterfaceIndex,
+			"index":        e.Number,
+			"numAddresses": len(e.Addresses),
+		}).Debug("Considering ENI for IP release")
 		// Count free IP addresses on this ENI
 		freeIpsOnENI := getUnusedIPs(usedIPs, ipsOnENI, e.IP)
 		freeOnENICount := len(freeIpsOnENI)

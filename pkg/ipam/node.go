@@ -897,12 +897,10 @@ func (n *Node) handleIPRelease(ctx context.Context, a *maintenanceAction) (insta
 			err := n.ops.ReleaseIPPrefixes(ctx, a.release)
 			if err != nil {
 				n.manager.metricsAPI.ReleaseAttempt(releaseIPPrefixes, failed, string(a.release.PoolID), metrics.SinceInSeconds(start))
-				scopedLog.Warn(
-					"Unable to unassign ipPrefixes from interface",
-					logfields.Error, err,
-					logfields.SelectedInterface, a.release.InterfaceID,
-					logfields.ReleasingAddresses, a.release.IPPrefixesToRelease,
-				)
+				scopedLog.WithFields(logrus.Fields{
+					"selectedInterface":  a.release.InterfaceID,
+					"releasingAddresses": len(a.release.IPsToRelease),
+				}).WithError(err).Warning("Unable to unassign ipPrefixes from interface")
 				return false, err
 			}
 			n.manager.metricsAPI.ReleaseAttempt(releaseIPPrefixes, success, string(a.release.PoolID), metrics.SinceInSeconds(start))
